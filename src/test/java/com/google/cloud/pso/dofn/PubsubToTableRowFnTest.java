@@ -51,9 +51,9 @@ import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/** Test cases for {@link PubsubAvroToTableRowFn}. */
+/** Test cases for {@link PubsubToTableRowFn}. */
 @RunWith(JUnit4.class)
-public class PubsubAvroToTableRowFnTest {
+public class PubsubToTableRowFnTest {
 
   @Rule public final transient TestPipeline pipeline = TestPipeline.create();
 
@@ -89,7 +89,7 @@ public class PubsubAvroToTableRowFnTest {
   }
 
   /**
-   * Tests the {@link PubsubAvroToTableRowFn#processElement} method successfully transforms Avro
+   * Tests the {@link PubsubToTableRowFn#processElement} method successfully transforms Avro
    * payloads to {@link com.google.cloud.pso.bigquery.TableRowWithSchema} objects.
    */
   @Test
@@ -111,22 +111,22 @@ public class PubsubAvroToTableRowFnTest {
             .apply("CreateInput", Create.of(message))
             .apply(
                 "AvroToTableRow",
-                ParDo.of(new PubsubAvroToTableRowFn())
+                ParDo.of(new PubsubToTableRowFn())
                     .withOutputTags(
-                        PubsubAvroToTableRowFn.MAIN_OUT,
-                        TupleTagList.of(PubsubAvroToTableRowFn.DEADLETTER_OUT)));
+                        PubsubToTableRowFn.MAIN_OUT,
+                        TupleTagList.of(PubsubToTableRowFn.DEADLETTER_OUT)));
 
     // Assert
     //
-    PAssert.that(result.get(PubsubAvroToTableRowFn.MAIN_OUT)).containsInAnyOrder(expectedTableRow);
+    PAssert.that(result.get(PubsubToTableRowFn.MAIN_OUT)).containsInAnyOrder(expectedTableRow);
 
-    PAssert.that(result.get(PubsubAvroToTableRowFn.DEADLETTER_OUT)).empty();
+    PAssert.that(result.get(PubsubToTableRowFn.DEADLETTER_OUT)).empty();
 
     pipeline.run();
   }
 
   /**
-   * Tests the {@link PubsubAvroToTableRowFn#processElement} method when the input is malformed and
+   * Tests the {@link PubsubToTableRowFn#processElement} method when the input is malformed and
    * cannot be processed.
    */
   @Test
@@ -148,16 +148,16 @@ public class PubsubAvroToTableRowFnTest {
             .apply("CreateInput", Create.of(message))
             .apply(
                 "AvroToTableRow",
-                ParDo.of(new PubsubAvroToTableRowFn())
+                ParDo.of(new PubsubToTableRowFn())
                     .withOutputTags(
-                        PubsubAvroToTableRowFn.MAIN_OUT,
-                        TupleTagList.of(PubsubAvroToTableRowFn.DEADLETTER_OUT)));
+                        PubsubToTableRowFn.MAIN_OUT,
+                        TupleTagList.of(PubsubToTableRowFn.DEADLETTER_OUT)));
 
     // Assert
     //
-    PAssert.that(result.get(PubsubAvroToTableRowFn.MAIN_OUT)).empty();
+    PAssert.that(result.get(PubsubToTableRowFn.MAIN_OUT)).empty();
 
-    PAssert.that(result.get(PubsubAvroToTableRowFn.DEADLETTER_OUT))
+    PAssert.that(result.get(PubsubToTableRowFn.DEADLETTER_OUT))
         .satisfies(
             collection -> {
               PubsubMessage errorMsg = collection.iterator().next();

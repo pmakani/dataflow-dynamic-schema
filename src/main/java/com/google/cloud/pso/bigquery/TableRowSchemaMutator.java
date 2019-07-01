@@ -16,9 +16,7 @@
 
 package com.google.cloud.pso.bigquery;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
-import com.google.auth.oauth2.GoogleCredentials;
+import com.google.api.services.bigquery.model.TableSchema;
 import com.google.cloud.bigquery.BigQuery;
 import com.google.cloud.bigquery.BigQueryOptions;
 import com.google.cloud.bigquery.Field;
@@ -31,15 +29,24 @@ import com.google.cloud.bigquery.TableDefinition;
 import com.google.cloud.bigquery.TableId;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import java.io.IOException;
-import java.util.List;
-import java.util.Set;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /** The {@link TableRowWithSchema} mutator. */
 public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, TableRowWithSchema> {
 
+  private static final Logger LOGGER = LoggerFactory.getLogger(TableRowSchemaMutator.class);
   private transient BigQuery bigQuery;
+  private transient BigQueryOptions options;
 
   public TableRowSchemaMutator(BigQuery bigQuery) {
     this.bigQuery = bigQuery;
@@ -48,11 +55,8 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
   @Setup
   public void setup() throws IOException {
     if (bigQuery == null) {
-      bigQuery =
-          BigQueryOptions.newBuilder()
-              .setCredentials(GoogleCredentials.getApplicationDefault())
-              .build()
-              .getService();
+      this.options = BigQueryOptions.getDefaultInstance();
+      bigQuery = options.getService();
     }
   }
 
@@ -61,7 +65,7 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
     Iterable<TableRowWithSchema> mutatedRows = context.element();
 
     // Retrieve the table schema
-    TableId tableId = TableId.of("data-analytics-pocs", "demo", "dynamic_schema");
+    TableId tableId = TableId.of(options.getProjectId(), "beam_examples", "dynamic_schema");
     Table table = bigQuery.getTable(tableId);
 
     checkNotNull(table, "Failed to find table to mutate: " + tableId.toString());
@@ -72,10 +76,34 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
     checkNotNull(table, "Unable to retrieve schema for table: " + tableId.toString());
 
     // Compare the records to the known table schema
-    Set<Field> additionalFields = getAdditionalFields(schema, mutatedRows);
-
+    //Set<Field> additionalFields = getAdditionalFields(schema, mutatedRows);
+    Set<Field> additionalFields = Sets.newHashSet();
+    for (TableRowWithSchema tableRowSchema : mutatedRows) {
+      TableSchema tableSchema = tableRowSchema.getTableSchema();
+      Iterator it = tableSchema.getFields().iterator();
+      while (it.hasNext()) {
+        Map<String, String> fieldMap = (Map<String, String>) it.next();
+        String name = null;
+        String type = null;
+        for (Map.Entry<String, String> field : fieldMap.entrySet()) {
+          if (field.getKey().equals("name")) {
+            name = field.getValue();
+          } else {
+            type = field.getValue();
+          }
+        }
+        if (name != null && type != null) {
+          additionalFields.add(
+                  Field.of(name, LegacySQLTypeName.valueOf(type))
+                          .toBuilder()
+                          .setMode(Mode.NULLABLE)
+                          .build());
+        }
+      }
+    }
     // Update the table schema for the new fields
-    schema = addFieldsToSchema(schema, additionalFields);
+    //schema = addFieldsToSchema(schema, additionalFields);
+    schema = Schema.of(additionalFields);
     table
         .toBuilder()
         .setDefinition(tableDef.toBuilder().setSchema(schema).build())
@@ -98,7 +126,6 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
     // Compare the existingSchema to the mutated rows
     FieldList fieldList = schema.getFields();
     Set<Field> additionalFields = Sets.newHashSet();
-
     mutatedRows.forEach(
         row ->
             row.getTableSchema()

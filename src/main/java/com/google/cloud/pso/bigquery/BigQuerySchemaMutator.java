@@ -26,8 +26,11 @@ import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Values;
 import org.apache.beam.sdk.transforms.WithKeys;
+import org.apache.beam.sdk.transforms.windowing.FixedWindows;
+import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
+import org.joda.time.Duration;
 
 /**
  * The {@link BigQuerySchemaMutator} class is a {@link PTransform} which given a PCollection of
@@ -79,10 +82,12 @@ public abstract class BigQuerySchemaMutator
     // those records can be updated.
     PCollection<TableRowWithSchema> mutatedRecords =
         input
+            .apply("1mWindow", Window.into(FixedWindows.of(Duration.standardMinutes(1L))))
             .apply(
                 "FailedInsertToTableRowWithSchema",
                 ParDo.of(new FailedInsertToTableRowWithSchema(getIncomingRecordsView()))
                     .withSideInputs(getIncomingRecordsView()))
+            .setCoder(TableRowWithSchemaCoder.of())
             .apply("KeyRecords", WithKeys.of("failed-record-batch"))
             .apply("GroupRecords", GroupByKey.create())
             .apply("RemoveKey", Values.create())
