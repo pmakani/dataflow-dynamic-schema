@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 Google Inc.
+ * Copyright (C) 2018 Google Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,15 @@
 
 package com.google.cloud.pso.dofn;
 
-import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.cloud.pso.bigquery.BigQueryAvroUtils;
 import com.google.cloud.pso.bigquery.TableRowWithSchema;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-
 import org.apache.avro.file.DataFileStream;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.io.gcp.bigquery.TableRowJsonCoder;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.values.TupleTag;
@@ -46,32 +38,39 @@ import org.apache.beam.sdk.values.TupleTag;
  * for dynamic routing within the {@link org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO} sink using
  * {@link org.apache.beam.sdk.io.gcp.bigquery.DynamicDestinations}.
  */
-public class PubsubToTableRowFn extends DoFn<PubsubMessage, TableRowWithSchema> {
+public class PubsubAvroToTableRowFn extends DoFn<PubsubMessage, TableRowWithSchema> {
 
-  public static final TupleTag<TableRowWithSchema> MAIN_OUT = new TupleTag<TableRowWithSchema>() {};
-  public static final TupleTag<PubsubMessage> DEADLETTER_OUT = new TupleTag<PubsubMessage>() {};
+    public static final TupleTag<TableRowWithSchema> MAIN_OUT = new TupleTag<TableRowWithSchema>() {};
+    public static final TupleTag<PubsubMessage> DEADLETTER_OUT = new TupleTag<PubsubMessage>() {};
 
-  @ProcessElement
-  public void processElement(ProcessContext context) {
-    PubsubMessage message = context.element();
-    List<TableFieldSchema> fields = new ArrayList<>();
-    for (Map.Entry<String, String> schema : message.getAttributeMap().entrySet()) {
-      fields.add(new TableFieldSchema().setName(schema.getKey()).setType(schema.getValue()));
+    @ProcessElement
+    public void processElement(ProcessContext context) {
+
+        PubsubMessage message = context.element();
+
+        try (ByteArrayInputStream in = new ByteArrayInputStream(message.getPayload())) {
+            try (DataFileStream<GenericRecord> dataFileStream =
+                         new DataFileStream<>(in, new GenericDatumReader<>())) {
+
+                while (dataFileStream.hasNext()) {
+                    GenericRecord record = dataFileStream.next();
+
+                    String tableName = record.getSchema().getNamespace();
+                    TableSchema tableSchema = BigQueryAvroUtils.getTableSchema(record.getSchema());
+                    TableRow tableRow = BigQueryAvroUtils.getTableRow(record);
+
+                    context.output(
+                            MAIN_OUT,
+                            TableRowWithSchema.newBuilder()
+                                    .setTableName(tableName)
+                                    .setTableSchema(tableSchema)
+                                    .setTableRow(tableRow)
+                                    .build());
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // Redirect all failed records to the dead-letter.
+            context.output(DEADLETTER_OUT, message);
+        }
     }
-    TableSchema tableSchema = new TableSchema();
-    tableSchema.setFields(fields);
-    try (InputStream in = new ByteArrayInputStream(message.getPayload())) {
-      TableRow row = TableRowJsonCoder.of().decode(in, Coder.Context.OUTER);
-      context.output(
-          MAIN_OUT,
-          TableRowWithSchema.newBuilder()
-              .setTableName("dynamic_schema")
-              .setTableRow(row)
-              .setTableSchema(tableSchema)
-              .build());
-    } catch (Exception e) {
-      e.printStackTrace();
-      context.output(DEADLETTER_OUT, message);
-    }
-  }
 }

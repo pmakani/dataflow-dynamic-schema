@@ -21,21 +21,15 @@ import com.google.cloud.bigquery.BigQuery;
 import com.google.cloud.bigquery.BigQueryOptions;
 import com.google.cloud.bigquery.Field;
 import com.google.cloud.bigquery.Field.Mode;
-import com.google.cloud.bigquery.FieldList;
 import com.google.cloud.bigquery.LegacySQLTypeName;
 import com.google.cloud.bigquery.Schema;
 import com.google.cloud.bigquery.Table;
 import com.google.cloud.bigquery.TableDefinition;
 import com.google.cloud.bigquery.TableId;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -44,7 +38,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 /** The {@link TableRowWithSchema} mutator. */
 public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, TableRowWithSchema> {
 
-  private static final Logger LOGGER = LoggerFactory.getLogger(TableRowSchemaMutator.class);
   private transient BigQuery bigQuery;
   private transient BigQueryOptions options;
 
@@ -76,7 +69,6 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
     checkNotNull(table, "Unable to retrieve schema for table: " + tableId.toString());
 
     // Compare the records to the known table schema
-    //Set<Field> additionalFields = getAdditionalFields(schema, mutatedRows);
     Set<Field> additionalFields = Sets.newHashSet();
     for (TableRowWithSchema tableRowSchema : mutatedRows) {
       TableSchema tableSchema = tableRowSchema.getTableSchema();
@@ -102,7 +94,6 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
       }
     }
     // Update the table schema for the new fields
-    //schema = addFieldsToSchema(schema, additionalFields);
     schema = Schema.of(additionalFields);
     table
         .toBuilder()
@@ -112,70 +103,5 @@ public class TableRowSchemaMutator extends DoFn<Iterable<TableRowWithSchema>, Ta
 
     // Pass all rows downstream now that the schema of the output table has been mutated.
     mutatedRows.forEach(context::output);
-  }
-
-  /**
-   * Retrieves the fields which have been added to the schema across all of the mutated rows.
-   *
-   * @param schema The schema to validate against.
-   * @param mutatedRows The records which have mutated.
-   * @return A unique set of fields which have been added to the schema.
-   */
-  private Set<Field> getAdditionalFields(Schema schema, Iterable<TableRowWithSchema> mutatedRows) {
-
-    // Compare the existingSchema to the mutated rows
-    FieldList fieldList = schema.getFields();
-    Set<Field> additionalFields = Sets.newHashSet();
-    mutatedRows.forEach(
-        row ->
-            row.getTableSchema()
-                .getFields()
-                .stream()
-                .filter(field -> !isExistingField(fieldList, field.getName()))
-                .map(
-                    field ->
-                        additionalFields.add(
-                            Field.of(field.getName(), LegacySQLTypeName.valueOf(field.getType()))
-                                .toBuilder()
-                                .setMode(Mode.NULLABLE)
-                                .build())));
-
-    return additionalFields;
-  }
-
-  /**
-   * Checks whether the field name exists within the field list.
-   *
-   * @param fieldList The field list to validate the field against.
-   * @param fieldName The field to check for.
-   * @return True if the fieldName exists within the field list, false otherwise.
-   */
-  private boolean isExistingField(FieldList fieldList, String fieldName) {
-    try {
-      fieldList.get(fieldName);
-      return true;
-    } catch (IllegalArgumentException e) {
-      return false;
-    }
-  }
-
-  /**
-   * Adds additional fields to an existing schema and returns a new schema containing all existing
-   * and additional fields.
-   *
-   * @param schema The pre-existing schema to add fields to.
-   * @param additionalFields The new fields to be added to the schema.
-   * @return A new schema containing the existing and new fields added to the schema.
-   */
-  private Schema addFieldsToSchema(Schema schema, Set<Field> additionalFields) {
-    List<Field> newFieldList = Lists.newArrayList();
-
-    // Add the existing fields to the schema fields.
-    newFieldList.addAll(schema.getFields());
-
-    // Add all new fields to the schema fields.
-    newFieldList.addAll(additionalFields);
-
-    return Schema.of(newFieldList);
   }
 }
