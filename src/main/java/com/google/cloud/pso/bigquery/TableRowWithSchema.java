@@ -27,9 +27,9 @@ import com.google.api.services.bigquery.model.TableSchema;
  */
 public final class TableRowWithSchema {
 
-  private final String tableName;
-  private final TableSchema tableSchema;
-  private final TableRow tableRow;
+  private final transient String tableName;
+  private final transient TableSchema tableSchema;
+  private final transient TableRow tableRow;
 
   // Private empty-arg constructor for Avro reflection.
   private TableRowWithSchema() {

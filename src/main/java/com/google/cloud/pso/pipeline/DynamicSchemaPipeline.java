@@ -18,10 +18,14 @@ package com.google.cloud.pso.pipeline;
 
 import com.google.cloud.pso.bigquery.BigQuerySchemaMutator;
 import com.google.cloud.pso.bigquery.TableRowWithSchema;
-import com.google.cloud.pso.dofn.PubsubAvroToTableRowFn;
+import com.google.cloud.pso.bigquery.TableRowWithSchemaCoder;
 import java.util.Map;
+
+import com.google.cloud.pso.dofn.PubsubToTableRowFn;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
+import org.apache.beam.sdk.coders.KvCoder;
+import org.apache.beam.sdk.coders.VarIntCoder;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
@@ -31,6 +35,7 @@ import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.options.StreamingOptions;
 import org.apache.beam.sdk.options.Validation.Required;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.ParDo;
@@ -47,7 +52,7 @@ import org.joda.time.Duration;
 public class DynamicSchemaPipeline {
 
   /** TODO: Document. */
-  public interface Options extends PipelineOptions {
+  public interface Options extends PipelineOptions, StreamingOptions {
 
     @Description("The Pub/Sub subscription to read messages from")
     @Required
@@ -69,7 +74,7 @@ public class DynamicSchemaPipeline {
    */
   public static void main(String[] args) {
     Options options = PipelineOptionsFactory.fromArgs(args).as(Options.class);
-
+    options.setStreaming(true);
     run(options);
   }
 
@@ -90,17 +95,18 @@ public class DynamicSchemaPipeline {
     PCollection<TableRowWithSchema> incomingRecords =
         pipeline
             .apply(
-                "ReadAvroMessages",
+                "ReadMessagesWithAttributes",
                 PubsubIO
                     .readMessagesWithAttributes()
                     .fromSubscription(options.getSubscription()))
-            .apply("PubsubAvroToTableRowFn",
+            .apply("PubsubToTableRowFn",
                 ParDo
-                    .of(new PubsubAvroToTableRowFn())
+                    .of(new PubsubToTableRowFn())
                     .withOutputTags(
-                        PubsubAvroToTableRowFn.MAIN_OUT,
-                        TupleTagList.of(PubsubAvroToTableRowFn.DEADLETTER_OUT)))
-            .get(PubsubAvroToTableRowFn.MAIN_OUT)
+                        PubsubToTableRowFn.MAIN_OUT,
+                        TupleTagList.of(PubsubToTableRowFn.DEADLETTER_OUT)))
+            .get(PubsubToTableRowFn.MAIN_OUT)
+            .setCoder(TableRowWithSchemaCoder.of())
             .apply("1mWindow", Window.into(FixedWindows.of(Duration.standardMinutes(1L))));
 
 
@@ -108,6 +114,7 @@ public class DynamicSchemaPipeline {
         incomingRecords.apply(
             "WriteToBigQuery",
             BigQueryIO.<TableRowWithSchema>write()
+                .to(options.getTable())
                 .withFormatFunction(TableRowWithSchema::getTableRow)
                 .withCreateDisposition(CreateDisposition.CREATE_NEVER)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND)
@@ -117,6 +124,7 @@ public class DynamicSchemaPipeline {
     PCollectionView<Map<Integer, TableRowWithSchema>> incomingRecordsView =
         incomingRecords
             .apply("KeyIncomingByHash", WithKeys.of(record -> record.getTableRow().hashCode()))
+            .setCoder(KvCoder.of(VarIntCoder.of(), TableRowWithSchemaCoder.of()))
             .apply("CreateView", View.asMap());
 
     // Process the failed inserts by mutating the output table schema and retrying the insert
@@ -126,6 +134,7 @@ public class DynamicSchemaPipeline {
         .apply(
             "RetryWriteMutatedRows",
             BigQueryIO.<TableRowWithSchema>write()
+                .to(options.getTable())
                 .withFormatFunction(TableRowWithSchema::getTableRow)
                 .withCreateDisposition(CreateDisposition.CREATE_NEVER)
                 .withWriteDisposition(WriteDisposition.WRITE_APPEND));
